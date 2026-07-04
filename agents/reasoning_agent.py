@@ -1,8 +1,6 @@
-import requests
 import json
 import re
-
-OLLAMA_URL = "http://localhost:11434/api/generate"
+from agents.ollama_client import generate_with_ollama
 
 
 # =====================================================
@@ -210,19 +208,14 @@ Rules:
 
     try:
 
-        response = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": "llama3",
-                "prompt": prompt,
-                "stream": False,
+        response_json = generate_with_ollama(
+            prompt,
+            timeout=120,
+            options={
                 "temperature": 0.2,
                 "num_predict": 700
-            },
-            timeout=120
+            }
         )
-
-        response_json = response.json()
 
         print(response_json)
 

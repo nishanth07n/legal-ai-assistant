@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+from vector_store.model_config import EMBEDDING_MODEL_NAME, MODEL_DEVICE
 from sentence_transformers import SentenceTransformer, util
 
 # Get project root directory
@@ -15,7 +16,7 @@ df = pd.read_csv(DATASET_PATH)
 df = df.fillna("")
 
 # Load embedding model
-model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer(EMBEDDING_MODEL_NAME, device=MODEL_DEVICE)
 
 # Text column used for embeddings
 TEXT_COLUMN = "Description"

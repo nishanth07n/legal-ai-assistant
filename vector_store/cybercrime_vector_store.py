@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+from vector_store.model_config import EMBEDDING_MODEL_NAME, MODEL_DEVICE
 from sentence_transformers import SentenceTransformer, util
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -7,7 +8,7 @@ DATASET_PATH = os.path.join(BASE_DIR, "datasets", "cybercrime_dataset.csv")
 
 df = pd.read_csv(DATASET_PATH)
 
-model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer(EMBEDDING_MODEL_NAME, device=MODEL_DEVICE)
 
 texts = df["summary"].astype(str).tolist()
 embeddings = model.encode(texts, convert_to_tensor=True)

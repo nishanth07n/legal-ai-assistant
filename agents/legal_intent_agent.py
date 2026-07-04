@@ -1,7 +1,5 @@
-import requests
 import json
-
-OLLAMA_URL = "http://localhost:11434/api/generate"
+from agents.ollama_client import generate_with_ollama
 
 
 def detect_legal_domain(text):
@@ -30,16 +28,9 @@ Return JSON:
 }}
 """
 
-    response = requests.post(
-        OLLAMA_URL,
-        json={
-            "model": "llama3",
-            "prompt": prompt,
-            "stream": False
-        }
-    )
+    response_json = generate_with_ollama(prompt)
 
-    output = response.json()["response"]
+    output = response_json["response"]
 
     try:
         start = output.find("{")

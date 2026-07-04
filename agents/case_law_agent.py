@@ -1,5 +1,5 @@
 import re
-import requests
+from agents.ollama_client import generate_with_ollama
 
 from vector_store.case_law_vector_store import search_case_law
 
@@ -36,17 +36,12 @@ def summarize_verdict(verdict_text):
         {verdict_text}
         """
 
-        response = requests.post(
-            "http://localhost:11434/api/generate",
-            json={
-                "model": "llama3",
-                "prompt": prompt,
-                "stream": False
-            },
+        response_json = generate_with_ollama(
+            prompt,
             timeout=60
         )
 
-        return response.json()["response"].strip()
+        return response_json["response"].strip()
 
     except Exception:
 

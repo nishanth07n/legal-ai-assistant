@@ -1,10 +1,11 @@
 import json
 import os
 import numpy as np
+from vector_store.model_config import EMBEDDING_MODEL_NAME, MODEL_DEVICE
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
-MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+MODEL = SentenceTransformer(EMBEDDING_MODEL_NAME, device=MODEL_DEVICE)
 
 DATA_PATH = os.path.join(
     os.path.dirname(__file__),

@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+from vector_store.model_config import EMBEDDING_MODEL_NAME, MODEL_DEVICE
 from sentence_transformers import (
     SentenceTransformer,
     util
@@ -32,7 +33,8 @@ df = pd.read_csv(DATASET_PATH)
 # =====================================================
 
 model = SentenceTransformer(
-    "all-MiniLM-L6-v2"
+    EMBEDDING_MODEL_NAME,
+    device=MODEL_DEVICE
 )
 
 # =====================================================
