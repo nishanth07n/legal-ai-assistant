@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+streamlit
+requests
+langdetect
+sqlalchemy
+chromadb
+sentence-transformers
+pytesseract
+pdfplumber
+pillow
+transformers
+torch
