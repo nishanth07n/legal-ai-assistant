@@ -154,24 +154,33 @@ if user_input:
         with st.spinner("Analyzing legal issue..."):
 
             try:
-
                 response = requests.post(
                     API_URL,
                     json={
                         "text": user_input,
                         "role": role
                     },
-                    timeout=120
+                    timeout=300
                 )
 
+                response.raise_for_status()
                 result = response.json()
 
-            except Exception:
+            except requests.exceptions.Timeout:
+                st.error("Request timed out while waiting for the AI model.")
+                st.stop()
 
-                st.error(
-                    "❌ Backend connection failed."
-                )
+            except requests.exceptions.ConnectionError as e:
+                st.error(f"Could not connect to backend.\n\n{e}")
+                st.stop()
 
+            except requests.exceptions.HTTPError as e:
+                st.error(f"Backend returned HTTP {response.status_code}")
+                st.text(response.text)
+                st.stop()
+
+            except Exception as e:
+                st.exception(e)
                 st.stop()
 
         # =================================================
