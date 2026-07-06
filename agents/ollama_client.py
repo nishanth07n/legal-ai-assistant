@@ -1,7 +1,7 @@
 import requests
 
 OLLAMA_GENERATE_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "gemma3:1b"
+OLLAMA_MODEL = "llama3:latest"
 
 CPU_ONLY_OPTIONS = {
     "num_gpu": 0
