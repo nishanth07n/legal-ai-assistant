@@ -1,58 +1,219 @@
 import json
 import re
+
 from agents.ollama_client import generate_with_ollama
 
 
-# =====================================================
-# ================= JSON EXTRACTION ===================
-# =====================================================
+MAX_CONTEXT_ITEMS = 2
+OLLAMA_TIMEOUT = 300
+OLLAMA_OPTIONS = {
+    "temperature": 0.1,
+    "num_predict": 220
+}
+
 
 def extract_json(text):
+    """Extract the first valid JSON object from model text."""
+    if not text:
+        return None
 
-    try:
+    cleaned = str(text).strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
 
-        # Remove markdown formatting
-        text = text.replace("```json", "")
-        text = text.replace("```", "")
+    decoder = json.JSONDecoder()
+    start_positions = [
+        index for index, char in enumerate(cleaned)
+        if char == "{"
+    ]
 
-        # Extract JSON block
-        start = text.find("{")
-        end = text.rfind("}") + 1
+    for start in start_positions:
+        try:
+            parsed, _ = decoder.raw_decode(cleaned[start:])
+        except json.JSONDecodeError:
+            continue
 
-        if start != -1 and end != -1:
-
-            json_text = text[start:end]
-
-            parsed = json.loads(json_text)
-
+        if isinstance(parsed, dict):
             return parsed
-
-    except Exception as e:
-
-        print("JSON Extraction Error:", e)
 
     return None
 
 
-# =====================================================
-# ================= CLEAN TEXT ========================
-# =====================================================
-
 def clean_text(text):
-
     if not text:
         return ""
 
-    text = str(text)
-
-    text = re.sub(r"\s+", " ", text)
-
-    return text.strip()
+    return re.sub(r"\s+", " ", str(text)).strip()
 
 
-# =====================================================
-# ================= MAIN AGENT ========================
-# =====================================================
+def _trimmed_text(value, limit=280):
+    text = clean_text(value)
+    if len(text) <= limit:
+        return text
+
+    return text[:limit].rsplit(" ", 1)[0].strip()
+
+
+def _prepare_ipc_sections(ipc_sections):
+    clean_ipc = []
+
+    for ipc in (ipc_sections or [])[:MAX_CONTEXT_ITEMS]:
+        if not isinstance(ipc, dict):
+            continue
+
+        clean_ipc.append({
+            "section": clean_text(ipc.get("section_or_article", "")),
+            "title": clean_text(ipc.get("title", ""))
+        })
+
+    return clean_ipc
+
+
+def _prepare_case_laws(case_laws):
+    clean_cases = []
+
+    for case in (case_laws or [])[:MAX_CONTEXT_ITEMS]:
+        if not isinstance(case, dict):
+            continue
+
+        clean_cases.append({
+            "title": clean_text(case.get("title", "")),
+            "summary": _trimmed_text(case.get("summary", ""))
+        })
+
+    return clean_cases
+
+
+def _base_prompt(user_text, domain, ipc_sections, case_laws):
+    return (
+        "You are Gemma 3 1B acting as an Indian legal assistant. "
+        "Return only compact valid JSON. No markdown.\n\n"
+        f"Problem: {_trimmed_text(user_text, 700)}\n"
+        f"Domain: {clean_text(domain)}\n"
+        f"IPC: {json.dumps(ipc_sections, ensure_ascii=True)}\n"
+        f"Cases: {json.dumps(case_laws, ensure_ascii=True)}\n"
+    )
+
+
+def _build_prompt(user_text, ipc_sections, case_laws, role, domain):
+    base = _base_prompt(user_text, domain, ipc_sections, case_laws)
+
+    if role == "Lawyer":
+        return base + """
+JSON schema:
+{
+  "legal_analysis": "max 90 words",
+  "simple_explanation": "plain language",
+  "severity_level": "Low/Moderate/High",
+  "recommended_next_steps": ["step 1", "step 2"],
+  "estimated_legal_timeline": {
+    "FIR Registration": "...",
+    "Investigation": "...",
+    "Trial": "...",
+    "Final Judgment": "..."
+  },
+  "cross_examination_questions": ["q1", "q2", "q3"],
+  "document_comparison": "brief note",
+  "legal_probability_prediction": {
+    "Conviction Probability": "...",
+    "Bail Probability": "...",
+    "Settlement Chance": "..."
+  }
+}
+Rules: be concise; do not repeat IPC text; use case facts only.
+"""
+
+    return base + """
+JSON schema:
+{
+  "legal_analysis": "max 70 words",
+  "simple_explanation": "plain language",
+  "severity_level": "Low/Moderate/High",
+  "recommended_next_steps": ["step 1", "step 2"]
+}
+Rules: simple citizen-friendly language; do not repeat IPC text.
+"""
+
+
+def _clean_steps(steps):
+    if not isinstance(steps, list):
+        return []
+
+    return [
+        clean_text(step)
+        for step in steps
+        if clean_text(step)
+    ]
+
+
+def _base_response(parsed):
+    return {
+        "legal_analysis": clean_text(parsed.get("legal_analysis", "")),
+        "simple_explanation": clean_text(parsed.get("simple_explanation", "")),
+        "severity_level": clean_text(parsed.get("severity_level", "Moderate")),
+        "recommended_next_steps": _clean_steps(
+            parsed.get("recommended_next_steps", [])
+        )
+    }
+
+
+def _lawyer_fields(parsed):
+    timeline = parsed.get("estimated_legal_timeline", {})
+    probabilities = parsed.get("legal_probability_prediction", {})
+
+    return {
+        "estimated_legal_timeline": (
+            timeline if isinstance(timeline, dict) else {}
+        ),
+        "cross_examination_questions": _clean_steps(
+            parsed.get("cross_examination_questions", [])
+        ),
+        "document_comparison": clean_text(
+            parsed.get("document_comparison", "")
+        ),
+        "legal_probability_prediction": (
+            probabilities if isinstance(probabilities, dict) else {}
+        )
+    }
+
+
+def _fallback_response(output, role):
+    response = {
+        "legal_analysis": clean_text(output),
+        "simple_explanation": "The legal issue was analyzed successfully.",
+        "severity_level": "Moderate",
+        "recommended_next_steps": [
+            "Consult a lawyer.",
+            "Review supporting documents."
+        ]
+    }
+
+    if role == "Lawyer":
+        response.update({
+            "estimated_legal_timeline": {},
+            "cross_examination_questions": [],
+            "document_comparison": "",
+            "legal_probability_prediction": {}
+        })
+
+    return response
+
+
+def _error_response(error):
+    return {
+        "legal_analysis": f"Error: {str(error)}",
+        "simple_explanation": "System could not process request.",
+        "severity_level": "Unknown",
+        "recommended_next_steps": [
+            "Retry request",
+            "Check backend connection"
+        ],
+        "estimated_legal_timeline": {},
+        "cross_examination_questions": [],
+        "document_comparison": "",
+        "legal_probability_prediction": {}
+    }
+
 
 def run_reasoning_agent(
     user_text,
@@ -61,315 +222,29 @@ def run_reasoning_agent(
     role,
     domain
 ):
-
-    # =================================================
-    # ============ CLEAN IPC DATA =====================
-    # =================================================
-
-    clean_ipc = []
-
-    for ipc in ipc_sections:
-
-        clean_ipc.append({
-
-            "section":
-                ipc.get(
-                    "section_or_article",
-                    ""
-                ),
-
-            "title":
-                ipc.get(
-                    "title",
-                    ""
-                )
-        })
-
-    # =================================================
-    # ============ LAWYER PROMPT ======================
-    # =================================================
-
-    if role == "Lawyer":
-
-        prompt = f"""
-You are an Indian Legal AI Assistant for lawyers.
-
-Analyze the case using the IPC sections and case laws.
-
-User Problem:
-{user_text}
-
-Legal Domain:
-{domain}
-
-IPC Sections:
-{json.dumps(clean_ipc)}
-
-Case Laws:
-{json.dumps(case_laws)}
-
-Return ONLY valid JSON.
-
-Format:
-
-{{
-  "legal_analysis": "...",
-
-  "simple_explanation": "...",
-
-  "severity_level": "...",
-
-  "recommended_next_steps": [
-    "...",
-    "..."
-  ],
-
-  "estimated_legal_timeline": {{
-    "FIR Registration": "...",
-    "Investigation": "...",
-    "Trial": "...",
-    "Final Judgment": "..."
-  }},
-
-  "cross_examination_questions": [
-    "...",
-    "...",
-    "..."
-  ],
-
-  "document_comparison": "...",
-
-  "legal_probability_prediction": {{
-    "Conviction Probability": "...",
-    "Bail Probability": "...",
-    "Settlement Chance": "..."
-  }}
-}}
-
-Rules:
-- Do NOT repeat IPC descriptions.
-- Keep legal analysis under 120 words.
-- Keep explanation simple.
-- Questions must relate to the case.
-- Timeline must be realistic.
-- Probability must be realistic.
-- Output ONLY JSON.
-"""
-
-    # =================================================
-    # ============ CITIZEN PROMPT =====================
-    # =================================================
-
-    else:
-
-        prompt = f"""
-You are an Indian Legal AI Assistant for citizens.
-
-Analyze the legal issue simply.
-
-User Problem:
-{user_text}
-
-Legal Domain:
-{domain}
-
-IPC Sections:
-{json.dumps(clean_ipc)}
-
-Case Laws:
-{json.dumps(case_laws)}
-
-Return ONLY valid JSON.
-
-Format:
-
-{{
-  "legal_analysis": "...",
-
-  "simple_explanation": "...",
-
-  "severity_level": "...",
-
-  "recommended_next_steps": [
-    "...",
-    "..."
-  ]
-}}
-
-Rules:
-- Keep response simple.
-- Do NOT repeat IPC descriptions.
-- Output ONLY JSON.
-"""
-
-    # =================================================
-    # ============ OLLAMA REQUEST =====================
-    # =================================================
+    clean_ipc = _prepare_ipc_sections(ipc_sections)
+    clean_cases = _prepare_case_laws(case_laws)
+    prompt = _build_prompt(user_text, clean_ipc, clean_cases, role, domain)
 
     try:
-
         response_json = generate_with_ollama(
             prompt,
-            timeout=120,
-            options={
-                "temperature": 0.2,
-                "num_predict": 700
-            }
+            timeout=OLLAMA_TIMEOUT,
+            options=OLLAMA_OPTIONS
         )
 
-        print(response_json)
-
-        output = response_json.get(
-            "response",
-            "No response generated."
-        )
-
-        # =================================================
-        # ============ PARSE JSON ==========================
-        # =================================================
-
+        output = response_json.get("response", "No response generated.")
         parsed = extract_json(output)
 
-        # =================================================
-        # ============ SUCCESS =============================
-        # =================================================
+        if not parsed:
+            return _fallback_response(output, role)
 
-        if parsed:
-
-            final_response = {
-
-                "legal_analysis": clean_text(
-                    parsed.get(
-                        "legal_analysis",
-                        ""
-                    )
-                ),
-
-                "simple_explanation": clean_text(
-                    parsed.get(
-                        "simple_explanation",
-                        ""
-                    )
-                ),
-
-                "severity_level": clean_text(
-                    parsed.get(
-                        "severity_level",
-                        "Moderate"
-                    )
-                ),
-
-                "recommended_next_steps": [
-                    clean_text(step)
-                    for step in parsed.get(
-                        "recommended_next_steps",
-                        []
-                    )
-                ]
-            }
-
-            # =============================================
-            # ============ LAWYER FIELDS ==================
-            # =============================================
-
-            if role == "Lawyer":
-
-                final_response.update({
-
-                    "estimated_legal_timeline":
-                        parsed.get(
-                            "estimated_legal_timeline",
-                            {}
-                        ),
-
-                    "cross_examination_questions": [
-                        clean_text(q)
-                        for q in parsed.get(
-                            "cross_examination_questions",
-                            []
-                        )
-                    ],
-
-                    "document_comparison":
-                        clean_text(
-                            parsed.get(
-                                "document_comparison",
-                                ""
-                            )
-                        ),
-
-                    "legal_probability_prediction":
-                        parsed.get(
-                            "legal_probability_prediction",
-                            {}
-                        )
-                })
-
-            return final_response
-
-        # =================================================
-        # ============ FALLBACK ============================
-        # =================================================
-
-        fallback_response = {
-
-            "legal_analysis":
-                clean_text(output),
-
-            "simple_explanation":
-                "The legal issue was analyzed successfully.",
-
-            "severity_level":
-                "Moderate",
-
-            "recommended_next_steps": [
-                "Consult a lawyer.",
-                "Review supporting documents."
-            ]
-        }
+        final_response = _base_response(parsed)
 
         if role == "Lawyer":
+            final_response.update(_lawyer_fields(parsed))
 
-            fallback_response.update({
-
-                "estimated_legal_timeline": {},
-
-                "cross_examination_questions": [],
-
-                "document_comparison": "",
-
-                "legal_probability_prediction": {}
-            })
-
-        return fallback_response
-
-    # =====================================================
-    # ================= ERROR HANDLING ====================
-    # =====================================================
+        return final_response
 
     except Exception as e:
-
-        return {
-
-            "legal_analysis":
-                f"Error: {str(e)}",
-
-            "simple_explanation":
-                "System could not process request.",
-
-            "severity_level":
-                "Unknown",
-
-            "recommended_next_steps": [
-                "Retry request",
-                "Check backend connection"
-            ],
-
-            "estimated_legal_timeline": {},
-
-            "cross_examination_questions": [],
-
-            "document_comparison": "",
-
-            "legal_probability_prediction": {}
-        }
+        return _error_response(e)
