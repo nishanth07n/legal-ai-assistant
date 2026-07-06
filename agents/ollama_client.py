@@ -8,7 +8,7 @@ CPU_ONLY_OPTIONS = {
 }
 
 
-def generate_with_ollama(prompt, timeout=120, options=None):
+def generate_with_ollama(prompt, timeout=1000, options=None):
     request_options = {
         **CPU_ONLY_OPTIONS,
         **(options or {})
