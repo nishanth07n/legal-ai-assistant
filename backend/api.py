@@ -1,3 +1,7 @@
+from cpu_runtime import force_cpu_runtime
+
+force_cpu_runtime()
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 from .orchestrator import run_agents
